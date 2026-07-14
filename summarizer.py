@@ -9,21 +9,25 @@ from sumy.parsers.plaintext import PlaintextParser
 from sumy.nlp.tokenizers import Tokenizer
 from sumy.summarizers.lex_rank import LexRankSummarizer
 
-# Download tokenizer data if missing
-try:
-    nltk.data.find("tokenizers/punkt")
-except LookupError:
-    nltk.download("punkt")
+# Download NLTK resources
+nltk.download("punkt")
+nltk.download("punkt_tab")
+
 
 @st.cache_resource
 def load_embedding_model():
     return SentenceTransformer("all-MiniLM-L6-v2")
 
+
 embedding_model = load_embedding_model()
 
 
 def extract_text_from_pdf(pdf_file):
-    doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
+    doc = fitz.open(
+        stream=pdf_file.read(),
+        filetype="pdf"
+    )
+
     text = ""
 
     for page in doc:
@@ -32,10 +36,18 @@ def extract_text_from_pdf(pdf_file):
     return text
 
 
-def chunk_text(text, chunk_size=500, overlap=50):
+def chunk_text(
+    text,
+    chunk_size=500,
+    overlap=50
+):
     chunks = []
 
-    for i in range(0, len(text), chunk_size - overlap):
+    for i in range(
+        0,
+        len(text),
+        chunk_size - overlap
+    ):
         chunk = text[i:i + chunk_size]
 
         if chunk.strip():
@@ -50,19 +62,33 @@ def embed_chunks(chunks):
         convert_to_numpy=True
     )
 
-    return embeddings.astype("float32")
+    return embeddings.astype(
+        "float32"
+    )
 
 
-def build_faiss_index(embeddings):
+def build_faiss_index(
+    embeddings
+):
     dimension = embeddings.shape[1]
 
-    index = faiss.IndexFlatL2(dimension)
-    index.add(embeddings)
+    index = faiss.IndexFlatL2(
+        dimension
+    )
+
+    index.add(
+        embeddings
+    )
 
     return index
 
 
-def retrieve_top_chunks(query, index, chunks, top_k=5):
+def retrieve_top_chunks(
+    query,
+    index,
+    chunks,
+    top_k=5
+):
     query_embedding = embedding_model.encode(
         [query],
         convert_to_numpy=True
@@ -73,14 +99,21 @@ def retrieve_top_chunks(query, index, chunks, top_k=5):
         top_k
     )
 
-    return [
-        chunks[i]
-        for i in indices[0]
-        if i < len(chunks)
-    ]
+    retrieved_chunks = []
+
+    for idx in indices[0]:
+        if idx < len(chunks):
+            retrieved_chunks.append(
+                chunks[idx]
+            )
+
+    return retrieved_chunks
 
 
-def summarize_text(text, sentence_count=5):
+def summarize_text(
+    text,
+    sentence_count=5
+):
     parser = PlaintextParser.from_string(
         text,
         Tokenizer("english")
@@ -94,31 +127,49 @@ def summarize_text(text, sentence_count=5):
     )
 
     return " ".join(
-        [str(sentence) for sentence in summary]
+        str(sentence)
+        for sentence in summary
     )
 
 
-def run_rag_pipeline(pdf_file, query):
-    text = extract_text_from_pdf(pdf_file)
+def run_rag_pipeline(
+    pdf_file,
+    query
+):
+    text = extract_text_from_pdf(
+        pdf_file
+    )
 
     if not text.strip():
-        return "No text could be extracted from this PDF."
+        return (
+            "No text could be extracted "
+            "from the PDF."
+        )
 
-    chunks = chunk_text(text)
+    chunks = chunk_text(
+        text
+    )
 
-    embeddings = embed_chunks(chunks)
+    embeddings = embed_chunks(
+        chunks
+    )
 
-    index = build_faiss_index(embeddings)
+    index = build_faiss_index(
+        embeddings
+    )
 
     top_chunks = retrieve_top_chunks(
         query,
         index,
-        chunks,
-        top_k=5
+        chunks
     )
 
-    context = " ".join(top_chunks)
+    context = " ".join(
+        top_chunks
+    )
 
-    summary = summarize_text(context)
+    summary = summarize_text(
+        context
+    )
 
     return summary
