@@ -14,7 +14,7 @@ embedding_model = SentenceTransformer(
 # Summarization model
 summarizer = pipeline(
     "summarization",
-    model="facebook/bart-large-cnn",
+    model="sshleifer/distilbart-cnn-12-6",
     token=st.secrets["huggingface"]["token"]
 )
 
