@@ -1,41 +1,29 @@
 import fitz
 import faiss
 import numpy as np
+import nltk
 import streamlit as st
 
-from huggingface_hub import login
 from sentence_transformers import SentenceTransformer
-from transformers import (
-    AutoTokenizer,
-    AutoModelForSeq2SeqLM
-)
+from sumy.parsers.plaintext import PlaintextParser
+from sumy.nlp.tokenizers import Tokenizer
+from sumy.summarizers.lex_rank import LexRankSummarizer
 
-# ---------------- HF Login ----------------
-login(token=st.secrets["huggingface"]["token"])
+# Download tokenizer data if missing
+try:
+    nltk.data.find("tokenizers/punkt")
+except LookupError:
+    nltk.download("punkt")
 
-# ---------------- Embedding Model ----------------
-embedding_model = SentenceTransformer(
-    "all-MiniLM-L6-v2"
-)
+@st.cache_resource
+def load_embedding_model():
+    return SentenceTransformer("all-MiniLM-L6-v2")
 
-# ---------------- Summarization Model ----------------
-MODEL_NAME = "sshleifer/distilbart-cnn-12-6"
+embedding_model = load_embedding_model()
 
-tokenizer = AutoTokenizer.from_pretrained(
-    MODEL_NAME
-)
 
-model = AutoModelForSeq2SeqLM.from_pretrained(
-    MODEL_NAME
-)
-
-# ---------------- PDF Extraction ----------------
 def extract_text_from_pdf(pdf_file):
-    doc = fitz.open(
-        stream=pdf_file.read(),
-        filetype="pdf"
-    )
-
+    doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
     text = ""
 
     for page in doc:
@@ -44,29 +32,18 @@ def extract_text_from_pdf(pdf_file):
     return text
 
 
-# ---------------- Chunking ----------------
-def chunk_text(
-    text,
-    chunk_size=1000,
-    overlap=200
-):
+def chunk_text(text, chunk_size=500, overlap=50):
     chunks = []
 
-    start = 0
+    for i in range(0, len(text), chunk_size - overlap):
+        chunk = text[i:i + chunk_size]
 
-    while start < len(text):
-        end = start + chunk_size
-
-        chunks.append(
-            text[start:end]
-        )
-
-        start += chunk_size - overlap
+        if chunk.strip():
+            chunks.append(chunk)
 
     return chunks
 
 
-# ---------------- Embeddings ----------------
 def embed_chunks(chunks):
     embeddings = embedding_model.encode(
         chunks,
@@ -76,28 +53,16 @@ def embed_chunks(chunks):
     return embeddings.astype("float32")
 
 
-# ---------------- FAISS ----------------
 def build_faiss_index(embeddings):
     dimension = embeddings.shape[1]
 
-    index = faiss.IndexFlatL2(
-        dimension
-    )
-
-    index.add(
-        embeddings
-    )
+    index = faiss.IndexFlatL2(dimension)
+    index.add(embeddings)
 
     return index
 
 
-# ---------------- Retrieval ----------------
-def retrieve_top_chunks(
-    query,
-    index,
-    chunks,
-    top_k=5
-):
+def retrieve_top_chunks(query, index, chunks, top_k=5):
     query_embedding = embedding_model.encode(
         [query],
         convert_to_numpy=True
@@ -108,75 +73,52 @@ def retrieve_top_chunks(
         top_k
     )
 
-    retrieved_chunks = []
-
-    for idx in indices[0]:
-        if idx < len(chunks):
-            retrieved_chunks.append(
-                chunks[idx]
-            )
-
-    return retrieved_chunks
+    return [
+        chunks[i]
+        for i in indices[0]
+        if i < len(chunks)
+    ]
 
 
-# ---------------- Summarization ----------------
-def summarize_text(text):
-    inputs = tokenizer(
+def summarize_text(text, sentence_count=5):
+    parser = PlaintextParser.from_string(
         text,
-        max_length=1024,
-        truncation=True,
-        return_tensors="pt"
+        Tokenizer("english")
     )
 
-    summary_ids = model.generate(
-        inputs["input_ids"],
-        max_length=200,
-        min_length=50,
-        num_beams=4,
-        early_stopping=True
+    summarizer = LexRankSummarizer()
+
+    summary = summarizer(
+        parser.document,
+        sentence_count
     )
 
-    summary = tokenizer.decode(
-        summary_ids[0],
-        skip_special_tokens=True
+    return " ".join(
+        [str(sentence) for sentence in summary]
     )
 
-    return summary
 
+def run_rag_pipeline(pdf_file, query):
+    text = extract_text_from_pdf(pdf_file)
 
-# ---------------- Main Pipeline ----------------
-def run_rag_pipeline(
-    pdf_file,
-    query
-):
-    text = extract_text_from_pdf(
-        pdf_file
-    )
+    if not text.strip():
+        return "No text could be extracted from this PDF."
 
-    chunks = chunk_text(
-        text
-    )
+    chunks = chunk_text(text)
 
-    embeddings = embed_chunks(
-        chunks
-    )
+    embeddings = embed_chunks(chunks)
 
-    index = build_faiss_index(
-        embeddings
-    )
+    index = build_faiss_index(embeddings)
 
-    retrieved_chunks = retrieve_top_chunks(
+    top_chunks = retrieve_top_chunks(
         query,
         index,
-        chunks
+        chunks,
+        top_k=5
     )
 
-    context = "\n".join(
-        retrieved_chunks
-    )
+    context = " ".join(top_chunks)
 
-    summary = summarize_text(
-        context
-    )
+    summary = summarize_text(context)
 
     return summary
