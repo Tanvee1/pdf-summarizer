@@ -1,175 +1,52 @@
-import fitz
+import fitz  # PyMuPDF
 import faiss
 import numpy as np
-import nltk
+from sentence_transformers import SentenceTransformer
+from openai import OpenAI
+import os
 import streamlit as st
 
-from sentence_transformers import SentenceTransformer
-from sumy.parsers.plaintext import PlaintextParser
-from sumy.nlp.tokenizers import Tokenizer
-from sumy.summarizers.lex_rank import LexRankSummarizer
+# Use API key from Streamlit secrets
+client = OpenAI(api_key=st.secrets["openai"]["api_key"])
 
-# Download NLTK resources
-nltk.download("punkt")
-nltk.download("punkt_tab")
-
-
-@st.cache_resource
-def load_embedding_model():
-    return SentenceTransformer("all-MiniLM-L6-v2")
-
-
-embedding_model = load_embedding_model()
-
+embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 def extract_text_from_pdf(pdf_file):
-    doc = fitz.open(
-        stream=pdf_file.read(),
-        filetype="pdf"
-    )
+    doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
+    return "\n".join([page.get_text() for page in doc])
 
-    text = ""
-
-    for page in doc:
-        text += page.get_text()
-
-    return text
-
-
-def chunk_text(
-    text,
-    chunk_size=500,
-    overlap=50
-):
+def chunk_text(text, chunk_size=500, overlap=50):
     chunks = []
-
-    for i in range(
-        0,
-        len(text),
-        chunk_size - overlap
-    ):
-        chunk = text[i:i + chunk_size]
-
-        if chunk.strip():
-            chunks.append(chunk)
-
+    for i in range(0, len(text), chunk_size - overlap):
+        chunks.append(text[i:i+chunk_size])
     return chunks
 
-
 def embed_chunks(chunks):
-    embeddings = embedding_model.encode(
-        chunks,
-        convert_to_numpy=True
-    )
+    return embedding_model.encode(chunks)
 
-    return embeddings.astype(
-        "float32"
-    )
-
-
-def build_faiss_index(
-    embeddings
-):
-    dimension = embeddings.shape[1]
-
-    index = faiss.IndexFlatL2(
-        dimension
-    )
-
-    index.add(
-        embeddings
-    )
-
+def build_faiss_index(embeddings):
+    dim = embeddings.shape[1]
+    index = faiss.IndexFlatL2(dim)
+    index.add(embeddings)
     return index
 
+def retrieve_top_chunks(query, index, chunks, top_k=5):
+    q_embed = embedding_model.encode([query])
+    distances, indices = index.search(q_embed, top_k)
+    return [chunks[i] for i in indices[0]]
 
-def retrieve_top_chunks(
-    query,
-    index,
-    chunks,
-    top_k=5
-):
-    query_embedding = embedding_model.encode(
-        [query],
-        convert_to_numpy=True
-    ).astype("float32")
-
-    distances, indices = index.search(
-        query_embedding,
-        top_k
+def summarize_with_openai(text):
+    prompt = f"Summarize the following:\n\n{text}"
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}]
     )
+    return response.choices[0].message.content.strip()
 
-    retrieved_chunks = []
-
-    for idx in indices[0]:
-        if idx < len(chunks):
-            retrieved_chunks.append(
-                chunks[idx]
-            )
-
-    return retrieved_chunks
-
-
-def summarize_text(
-    text,
-    sentence_count=5
-):
-    parser = PlaintextParser.from_string(
-        text,
-        Tokenizer("english")
-    )
-
-    summarizer = LexRankSummarizer()
-
-    summary = summarizer(
-        parser.document,
-        sentence_count
-    )
-
-    return " ".join(
-        str(sentence)
-        for sentence in summary
-    )
-
-
-def run_rag_pipeline(
-    pdf_file,
-    query
-):
-    text = extract_text_from_pdf(
-        pdf_file
-    )
-
-    if not text.strip():
-        return (
-            "No text could be extracted "
-            "from the PDF."
-        )
-
-    chunks = chunk_text(
-        text
-    )
-
-    embeddings = embed_chunks(
-        chunks
-    )
-
-    index = build_faiss_index(
-        embeddings
-    )
-
-    top_chunks = retrieve_top_chunks(
-        query,
-        index,
-        chunks
-    )
-
-    context = " ".join(
-        top_chunks
-    )
-
-    summary = summarize_text(
-        context
-    )
-
-    return summary
+def run_rag_pipeline(pdf_file, query):
+    text = extract_text_from_pdf(pdf_file)
+    chunks = chunk_text(text)
+    embeddings = embed_chunks(chunks)
+    index = build_faiss_index(np.array(embeddings))
+    top_chunks = retrieve_top_chunks(query, index, chunks)
+    return summarize_with_openai(" ".join(top_chunks))
