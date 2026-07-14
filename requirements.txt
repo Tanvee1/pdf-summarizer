@@ -2,6 +2,5 @@ streamlit
 PyMuPDF
 faiss-cpu
 sentence-transformers
-sumy
-nltk
+openai
 numpy
