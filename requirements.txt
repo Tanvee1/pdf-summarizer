@@ -2,7 +2,6 @@ streamlit
 PyMuPDF
 faiss-cpu
 sentence-transformers
-transformers
-torch
-huggingface_hub
+sumy
+nltk
 numpy
