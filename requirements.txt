@@ -2,6 +2,7 @@ streamlit
 PyMuPDF
 faiss-cpu
 sentence-transformers
+transformers
+torch
+torchvision
 numpy
-sumy
-nltk
